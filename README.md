@@ -1,1 +1,1 @@
-# ESP32-C6-Medidor-de-energia
+# Dashboard-de-energia-eletrica-IOT

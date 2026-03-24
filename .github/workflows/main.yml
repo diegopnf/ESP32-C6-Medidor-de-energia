@@ -1,0 +1,107 @@
+name: Pipeline IoT - ESP32-C6
+
+# Define os gatilhos para as branches de Produção (main) e Desenvolvimento (develop)
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+jobs:
+  # Validar Infraestrutura (Terraform)
+  terraform_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Configurar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      # Executa a inicialização e validação dentro da pasta terraform
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: "us-east-1" # Região do bucket de estado
+      
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.0
+
+      - name: Run TFLint
+        run: tflint -f compact
+        working-directory: ./terraform
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ./terraform
+          soft_fail: false # O pipeline para se encontrar falhas críticas
+        
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ./terraform
+
+      # Gera um plano de execução para você ver o que será criado
+      - name: Terraform Plan
+        run: terraform plan
+        working-directory: ./terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: "us-east-1"
+      
+      # Só roda na branch 'main' para evitar custos acidentais em outras branches
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve
+        working-directory: ./terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: "us-east-1"
+
+  # Compilar Firmware (PlatformIO)
+  build_iot_firmware:
+    needs: terraform_validate # Só inicia se o Terraform estiver sintaticamente correto
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      # Configura o Python (base para o PlatformIO)
+      - name: Configurar Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      
+      # Cria um cache das bibliotecas para acelerar builds futuros
+      - name: Cache do PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('**/platformio.ini') }}
+
+      # Instala o PlatformIO Core CLI
+      - name: Instalar PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
+      
+      # Compila o código (Build) definido no platformio.ini
+      - name: Compilar Firmware (ESP32-C6)
+        run: pio run
+      
+      # Salva o binário gerado como um artefato do GitHub, permite que baixar o .bin para o teste manual ou OTA
+      - name: Upload do Artefato de Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32c6-build
+          path: .pio/build/esp32-c6-devkitm-1/firmware.bin
