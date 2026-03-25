@@ -25,7 +25,3 @@ resource "aws_dynamodb_table" "telemetria" {
     Environment = "Dev"
   }
 }
-
-output "table_arn" {
-  value = aws_dynamodb_table.telemetria.arn
-}
